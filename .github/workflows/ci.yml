@@ -1,0 +1,156 @@
+name: TradeGuard CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    name: Build (compile all modules)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          java-version: "17"
+          distribution: temurin
+          cache: maven
+      - name: Compile sut-api
+        run: mvn -B -f sut-api/pom.xml compile
+      - name: Compile test-suite
+        run: mvn -B -f sut-api/pom.xml install -DskipTests && mvn -B -f test-suite/pom.xml test-compile
+
+  unit-tests:
+    name: Unit Tests (JUnit + Mockito + JaCoCo)
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          java-version: "17"
+          distribution: temurin
+          cache: maven
+      - name: Install sut-api
+        run: mvn -B -f sut-api/pom.xml install -DskipTests
+      - name: Run unit tests
+        run: mvn -B -f test-suite/pom.xml test
+      - name: Upload JaCoCo report
+        uses: actions/upload-artifact@v4
+        with:
+          name: jacoco-report
+          path: test-suite/target/site/jacoco/
+
+  integration-tests:
+    name: Integration Tests (Testcontainers + PostgreSQL)
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          java-version: "17"
+          distribution: temurin
+          cache: maven
+      - name: Install sut-api
+        run: mvn -B -f sut-api/pom.xml install -DskipTests
+      - name: Run integration tests
+        run: mvn -B -f test-suite/pom.xml verify -P integration
+      - name: Upload Failsafe report
+        uses: actions/upload-artifact@v4
+        with:
+          name: failsafe-integration-report
+          path: test-suite/target/failsafe-reports/
+
+  bdd-tests:
+    name: BDD Tests (Cucumber + REST Assured)
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          java-version: "17"
+          distribution: temurin
+          cache: maven
+      - name: Install sut-api
+        run: mvn -B -f sut-api/pom.xml install -DskipTests
+      - name: Run BDD tests
+        run: mvn -B -f test-suite/pom.xml verify -P bdd
+      - name: Upload Cucumber report
+        uses: actions/upload-artifact@v4
+        with:
+          name: cucumber-report
+          path: test-suite/target/cucumber-reports/
+
+  selenium-tests:
+    name: Selenium UI Tests (headless Chrome)
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          java-version: "17"
+          distribution: temurin
+          cache: maven
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install sut-api
+        run: mvn -B -f sut-api/pom.xml install -DskipTests
+      - name: Start SUT API
+        run: |
+          nohup java -jar sut-api/target/sut-api.jar --spring.profiles.active=test > sut-api.log 2>&1 &
+          npx wait-on http://localhost:8080/api/trades --timeout 60000
+      - name: Install and start dashboard
+        working-directory: frontend-dashboard
+        run: |
+          npm install
+          nohup npm run dev -- --host > dashboard.log 2>&1 &
+          npx wait-on http://localhost:5173 --timeout 60000
+      - name: Run Selenium tests
+        run: mvn -B -f test-suite/pom.xml verify -P selenium
+      - name: Upload Selenium report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: selenium-failsafe-report
+          path: test-suite/target/failsafe-reports/
+
+  performance-tests:
+    name: Performance Tests (Gatling)
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          java-version: "17"
+          distribution: temurin
+          cache: maven
+      - name: Install sut-api
+        run: mvn -B -f sut-api/pom.xml install -DskipTests
+      - name: Start SUT API
+        run: |
+          nohup java -jar sut-api/target/sut-api.jar --spring.profiles.active=test > sut-api.log 2>&1 &
+          npx --yes wait-on http://localhost:8080/api/trades --timeout 60000
+      - name: Run Gatling simulation
+        run: mvn -B -f performance/pom.xml gatling:test -Dgatling.baseUrl=http://localhost:8080
+      - name: Upload Gatling report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gatling-report
+          path: performance/target/gatling/
+
+  publish-reports:
+    name: Publish All Reports
+    runs-on: ubuntu-latest
+    needs: [unit-tests, integration-tests, bdd-tests, selenium-tests, performance-tests]
+    if: always()
+    steps:
+      - name: Reports already uploaded per job
+        run: echo "All suite reports were uploaded as job-level artifacts."

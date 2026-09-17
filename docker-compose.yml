@@ -1,0 +1,48 @@
+version: "3.8"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: tradeguard-postgres
+    environment:
+      POSTGRES_DB: tradeguard
+      POSTGRES_USER: tradeguard
+      POSTGRES_PASSWORD: tradeguard
+    ports:
+      - "5432:5432"
+    volumes:
+      - tradeguard-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tradeguard"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  sut-api:
+    build:
+      context: ./sut-api
+      dockerfile: Dockerfile
+    container_name: tradeguard-sut-api
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/tradeguard
+      SPRING_DATASOURCE_USERNAME: tradeguard
+      SPRING_DATASOURCE_PASSWORD: tradeguard
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  frontend-dashboard:
+    build:
+      context: ./frontend-dashboard
+    container_name: tradeguard-dashboard
+    environment:
+      VITE_API_BASE_URL: http://localhost:8080/api
+    ports:
+      - "5173:5173"
+    depends_on:
+      - sut-api
+
+volumes:
+  tradeguard-pgdata:

@@ -1,0 +1,96 @@
+:root {
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  color-scheme: light;
+}
+
+body {
+  margin: 0;
+  background: #f4f6f8;
+}
+
+.app {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 2rem 1.5rem;
+}
+
+header h1 {
+  margin-bottom: 0.25rem;
+}
+
+header p {
+  color: #667085;
+  margin-top: 0;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  background: white;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+th, td {
+  padding: 0.75rem 1rem;
+  text-align: left;
+  border-bottom: 1px solid #eaecf0;
+}
+
+th {
+  background: #f9fafb;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  color: #667085;
+}
+
+.status-badge {
+  padding: 0.2rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.status-draft { background: #eef2ff; color: #4338ca; }
+.status-validated { background: #ecfdf3; color: #027a48; }
+.status-matched { background: #fffaeb; color: #b54708; }
+.status-settled { background: #f0f9ff; color: #026aa2; }
+.status-rejected { background: #fef3f2; color: #b42318; }
+.status-cancelled { background: #f2f4f7; color: #475467; }
+
+button {
+  margin-right: 0.4rem;
+  padding: 0.35rem 0.7rem;
+  border: 1px solid #d0d5dd;
+  border-radius: 6px;
+  background: white;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+
+button:hover {
+  background: #f9fafb;
+}
+
+.toast {
+  position: fixed;
+  bottom: 1.5rem;
+  right: 1.5rem;
+  background: #b42318;
+  color: white;
+  padding: 0.75rem 1rem;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.toast button {
+  background: transparent;
+  border: none;
+  color: white;
+  font-size: 1.1rem;
+  cursor: pointer;
+}
