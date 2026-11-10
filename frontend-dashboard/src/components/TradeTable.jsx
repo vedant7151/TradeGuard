@@ -22,6 +22,11 @@ export default function TradeTable({ trades, onAction }) {
         </tr>
       </thead>
       <tbody>
+        {trades.length === 0 && (
+          <tr data-testid="empty-row">
+            <td colSpan={7}>No trades yet - create one above.</td>
+          </tr>
+        )}
         {trades.map((trade) => (
           <tr key={trade.id} data-trade-id={trade.id}>
             <td>{trade.tradeRef}</td>
@@ -36,6 +41,11 @@ export default function TradeTable({ trades, onAction }) {
               >
                 {trade.status}
               </span>
+              {trade.rejectionReason && (
+                <div className="reason" data-testid="rejection-reason">
+                  {trade.rejectionReason}
+                </div>
+              )}
             </td>
             <td>
               {(ACTIONS_BY_STATUS[trade.status] || []).map((action) => (

@@ -13,7 +13,10 @@ import java.math.BigDecimal;
 import java.time.Instant;
 
 @Entity
-@Table(name = "trades")
+@Table(name = "trades", indexes = {
+    @Index(name = "idx_trades_portfolio_id", columnList = "portfolio_id"),
+    @Index(name = "idx_trades_status", columnList = "status")
+})
 @Getter
 @Setter
 @NoArgsConstructor
@@ -24,6 +27,9 @@ public class Trade {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
+
+    @Version
+    private Long version;
 
     @Column(name = "trade_ref", nullable = false, unique = true)
     private String tradeRef;

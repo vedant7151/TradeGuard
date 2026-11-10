@@ -60,8 +60,9 @@ public class TradeService {
             throw new InvalidTradeStateException("Only DRAFT trades can be validated, current status: " + trade.getStatus());
         }
 
-        Portfolio portfolio = portfolioRepository.findById(trade.getPortfolioId())
-                .orElseThrow(() -> new PortfolioNotFoundException(trade.getPortfolioId()));
+        Long portfolioId = trade.getPortfolioId();
+        Portfolio portfolio = portfolioRepository.findByIdForUpdate(portfolioId)
+                .orElseThrow(() -> new PortfolioNotFoundException(portfolioId));
 
         TradeValidationService.ValidationResult result = tradeValidationService.validate(trade, portfolio);
 
@@ -93,8 +94,14 @@ public class TradeService {
             throw new InvalidTradeStateException("Only MATCHED trades can be settled, current status: " + trade.getStatus());
         }
 
-        Portfolio portfolio = portfolioRepository.findById(trade.getPortfolioId())
-                .orElseThrow(() -> new PortfolioNotFoundException(trade.getPortfolioId()));
+        Long portfolioId = trade.getPortfolioId();
+        Portfolio portfolio = portfolioRepository.findByIdForUpdate(portfolioId)
+                .orElseThrow(() -> new PortfolioNotFoundException(portfolioId));
+
+        trade = getTrade(id);
+        if (trade.getStatus() != TradeStatus.MATCHED) {
+            throw new InvalidTradeStateException("Only MATCHED trades can be settled, current status: " + trade.getStatus());
+        }
 
         settlementService.settle(trade, portfolio);
 

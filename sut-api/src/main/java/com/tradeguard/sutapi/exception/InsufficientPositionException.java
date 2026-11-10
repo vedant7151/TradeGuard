@@ -1,0 +1,8 @@
+package com.tradeguard.sutapi.exception;
+
+public class InsufficientPositionException extends RuntimeException {
+
+    public InsufficientPositionException(String message) {
+        super(message);
+    }
+}

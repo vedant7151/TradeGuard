@@ -1,138 +1,153 @@
 package com.tradeguard.testsuite.integration;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.tradeguard.sutapi.dto.TradeRequest;
 import com.tradeguard.sutapi.entity.Portfolio;
-import com.tradeguard.sutapi.enums.TradeType;
-import com.tradeguard.sutapi.repository.PortfolioRepository;
-import com.tradeguard.sutapi.repository.PositionRepository;
+import com.tradeguard.sutapi.entity.Trade;
+import com.tradeguard.sutapi.enums.TradeStatus;
 import com.tradeguard.sutapi.repository.TradeRepository;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.test.context.jdbc.Sql;
-import org.springframework.test.web.servlet.MockMvc;
-import org.springframework.test.web.servlet.setup.MockMvcBuilders;
-import org.springframework.transaction.annotation.Transactional;
-import org.springframework.web.context.WebApplicationContext;
-
-import java.math.BigDecimal;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.containsStringIgnoringCase;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * Exercises the full controller -> service -> repository -> real PostgreSQL
- * stack for the complete trade lifecycle: DRAFT -> VALIDATED -> MATCHED -> SETTLED.
+ * Exercises controller -> service -> repository -> real PostgreSQL for the full
+ * trade lifecycle and verifies the resulting database state.
  */
-@Transactional
 class TradeLifecycleIT extends AbstractIntegrationTest {
-
-    @Autowired
-    private WebApplicationContext webApplicationContext;
-
-    @Autowired
-    private PortfolioRepository portfolioRepository;
-
-    @Autowired
-    private PositionRepository positionRepository;
 
     @Autowired
     private TradeRepository tradeRepository;
 
-    private MockMvc mockMvc;
-    private final ObjectMapper objectMapper = new ObjectMapper();
-    private Long portfolioId;
-
-    @BeforeEach
-    void setUp() {
-        mockMvc = MockMvcBuilders.webAppContextSetup(webApplicationContext).build();
-        Portfolio portfolio = portfolioRepository.save(
-                Portfolio.builder().name("IT Portfolio").cashBalance(new BigDecimal("10000")).build());
-        portfolioId = portfolio.getId();
-    }
-
     @Test
-    void fullBuyTradeLifecycle_updatesPositionAndCashInDatabase() throws Exception {
-        TradeRequest request = new TradeRequest();
-        request.setPortfolioId(portfolioId);
-        request.setTicker("AAPL");
-        request.setTradeType(TradeType.BUY);
-        request.setQuantity(new BigDecimal("10"));
-        request.setPrice(new BigDecimal("150.00"));
+    void fullBuyLifecycle_persistsTradeAndUpdatesPositionAndCash() throws Exception {
+        long id = createTrade("BUY", "AAPL", "10", "150.00");
 
-        String createResponse = mockMvc.perform(post("/api/trades")
-                        .contentType("application/json")
-                        .content(objectMapper.writeValueAsString(request)))
-                .andExpect(status().isCreated())
-                .andExpect(jsonPath("$.status").value("DRAFT"))
-                .andReturn().getResponse().getContentAsString();
-
-        Long tradeId = objectMapper.readTree(createResponse).get("id").asLong();
-
-        mockMvc.perform(post("/api/trades/{id}/validate", tradeId))
+        mockMvc.perform(post("/api/trades/{id}/validate", id))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("VALIDATED"));
-
-        mockMvc.perform(post("/api/trades/{id}/match", tradeId))
+        mockMvc.perform(post("/api/trades/{id}/match", id))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("MATCHED"));
-
-        mockMvc.perform(post("/api/trades/{id}/settle", tradeId))
+        mockMvc.perform(post("/api/trades/{id}/settle", id))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.status").value("SETTLED"));
+                .andExpect(jsonPath("$.status").value("SETTLED"))
+                .andExpect(jsonPath("$.settledAt").isNotEmpty());
+
+        Trade persisted = tradeRepository.findById(id).orElseThrow();
+        assertThat(persisted.getStatus()).isEqualTo(TradeStatus.SETTLED);
+        assertThat(persisted.getSettledAt()).isNotNull();
 
         Portfolio updated = portfolioRepository.findById(portfolioId).orElseThrow();
         assertThat(updated.getCashBalance()).isEqualByComparingTo("8500.00");
-
         assertThat(positionRepository.findByPortfolioIdAndTicker(portfolioId, "AAPL"))
-                .isPresent()
-                .get()
-                .satisfies(position -> assertThat(position.getQuantity()).isEqualByComparingTo("10"));
+                .isPresent().get()
+                .satisfies(p -> assertThat(p.getQuantity()).isEqualByComparingTo("10"));
     }
 
     @Test
-    void insufficientFundsBuyTrade_isRejected() throws Exception {
-        TradeRequest request = new TradeRequest();
-        request.setPortfolioId(portfolioId);
-        request.setTicker("AAPL");
-        request.setTradeType(TradeType.BUY);
-        request.setQuantity(new BigDecimal("1000"));
-        request.setPrice(new BigDecimal("150.00"));
+    void fullSellLifecycle_creditsCashAndReducesPosition() throws Exception {
+        givenHolding(portfolioId, "AAPL", "20");
+        long id = createTrade("SELL", "AAPL", "8", "150.00");
 
-        String createResponse = mockMvc.perform(post("/api/trades")
-                        .contentType("application/json")
-                        .content(objectMapper.writeValueAsString(request)))
-                .andReturn().getResponse().getContentAsString();
+        action(id, "validate");
+        action(id, "match");
+        mockMvc.perform(post("/api/trades/{id}/settle", id))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("SETTLED"));
 
-        Long tradeId = objectMapper.readTree(createResponse).get("id").asLong();
+        assertThat(portfolioRepository.findById(portfolioId).orElseThrow().getCashBalance()).isEqualByComparingTo("11200");
+        assertThat(positionRepository.findByPortfolioIdAndTicker(portfolioId, "AAPL").orElseThrow().getQuantity())
+                .isEqualByComparingTo("12");
+    }
 
-        mockMvc.perform(post("/api/trades/{id}/validate", tradeId))
+    @Test
+    void insufficientFundsBuy_isRejectedAndCashUntouched() throws Exception {
+        long id = createTrade("BUY", "AAPL", "1000", "150.00");
+
+        mockMvc.perform(post("/api/trades/{id}/validate", id))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("REJECTED"))
                 .andExpect(jsonPath("$.rejectionReason", containsStringIgnoringCase("insufficient funds")));
+
+        assertThat(tradeRepository.findById(id).orElseThrow().getRejectionReason()).isNotBlank();
+        assertThat(portfolioRepository.findById(portfolioId).orElseThrow().getCashBalance()).isEqualByComparingTo("10000");
     }
 
     @Test
-    void cancellingDraftTrade_removesItFromActiveList() throws Exception {
-        TradeRequest request = new TradeRequest();
-        request.setPortfolioId(portfolioId);
-        request.setTicker("MSFT");
-        request.setTradeType(TradeType.BUY);
-        request.setQuantity(new BigDecimal("5"));
-        request.setPrice(new BigDecimal("100.00"));
+    void sellWithoutHolding_isRejected() throws Exception {
+        long id = createTrade("SELL", "AAPL", "1", "150.00");
 
-        String createResponse = mockMvc.perform(post("/api/trades")
-                        .contentType("application/json")
-                        .content(objectMapper.writeValueAsString(request)))
-                .andReturn().getResponse().getContentAsString();
+        mockMvc.perform(post("/api/trades/{id}/validate", id))
+                .andExpect(jsonPath("$.status").value("REJECTED"))
+                .andExpect(jsonPath("$.rejectionReason", containsString("Insufficient position")));
+    }
 
-        Long tradeId = objectMapper.readTree(createResponse).get("id").asLong();
+    @Test
+    void cancellingDraftTrade_marksItCancelledInDatabase() throws Exception {
+        long id = createTrade("BUY", "MSFT", "5", "100.00");
 
-        mockMvc.perform(delete("/api/trades/{id}", tradeId)).andExpect(status().isNoContent());
+        mockMvc.perform(delete("/api/trades/{id}", id)).andExpect(status().isNoContent());
 
-        assertThat(tradeRepository.findById(tradeId).orElseThrow().getStatus().name()).isEqualTo("CANCELLED");
+        assertThat(tradeRepository.findById(id).orElseThrow().getStatus()).isEqualTo(TradeStatus.CANCELLED);
+    }
+
+    @Test
+    void cancellingMatchedTrade_isConflictAndStatusUnchanged() throws Exception {
+        long id = createTrade("BUY", "MSFT", "5", "100.00");
+        action(id, "validate");
+        action(id, "match");
+
+        mockMvc.perform(delete("/api/trades/{id}", id))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.message", containsString("Only DRAFT")));
+
+        assertThat(tradeRepository.findById(id).orElseThrow().getStatus()).isEqualTo(TradeStatus.MATCHED);
+    }
+
+    @Test
+    void settlingDraftTrade_isConflictAndNothingChanges() throws Exception {
+        long id = createTrade("BUY", "MSFT", "5", "100.00");
+
+        mockMvc.perform(post("/api/trades/{id}/settle", id))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.status").value(409));
+
+        assertThat(portfolioRepository.findById(portfolioId).orElseThrow().getCashBalance()).isEqualByComparingTo("10000");
+        assertThat(positionRepository.findByPortfolioId(portfolioId)).isEmpty();
+    }
+
+    @Test
+    void settlingTwice_doesNotDoubleApplyEffects() throws Exception {
+        long id = createTrade("BUY", "AAPL", "10", "150.00");
+        action(id, "validate");
+        action(id, "match");
+        action(id, "settle");
+
+        mockMvc.perform(post("/api/trades/{id}/settle", id)).andExpect(status().isConflict());
+
+        assertThat(portfolioRepository.findById(portfolioId).orElseThrow().getCashBalance()).isEqualByComparingTo("8500");
+        assertThat(positionRepository.findByPortfolioIdAndTicker(portfolioId, "AAPL").orElseThrow().getQuantity())
+                .isEqualByComparingTo("10");
+    }
+
+    @Test
+    void repeatedBuys_accumulateIntoSinglePosition() throws Exception {
+        for (int i = 0; i < 2; i++) {
+            long id = createTrade("BUY", "AAPL", "3", "100.00");
+            action(id, "validate");
+            action(id, "match");
+            action(id, "settle");
+        }
+
+        assertThat(positionRepository.findByPortfolioId(portfolioId)).hasSize(1);
+        assertThat(positionRepository.findByPortfolioIdAndTicker(portfolioId, "AAPL").orElseThrow().getQuantity())
+                .isEqualByComparingTo("6");
+        assertThat(portfolioRepository.findById(portfolioId).orElseThrow().getCashBalance()).isEqualByComparingTo("9400");
     }
 }

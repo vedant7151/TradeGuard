@@ -15,11 +15,20 @@
         <maven.compiler.source>17</maven.compiler.source>
         <maven.compiler.target>17</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <gatling-plugin.version>4.13.1</gatling-plugin.version>
-        <gatling.version>3.11.5</gatling.version>
+        <!-- Override with -Dgatling.simulationClass=simulations.SettlementFlowSimulation -->
+        <gatling.simulationClass>simulations.TradeSubmissionSimulation</gatling.simulationClass>
+        <gatling-plugin.version>4.21.12</gatling-plugin.version>
+        <gatling.version>3.14.9</gatling.version>
+        <scala.version>2.13.16</scala.version>
+        <scala-plugin.version>4.9.5</scala-plugin.version>
     </properties>
 
     <dependencies>
+        <dependency>
+            <groupId>org.scala-lang</groupId>
+            <artifactId>scala-library</artifactId>
+            <version>${scala.version}</version>
+        </dependency>
         <dependency>
             <groupId>io.gatling.highcharts</groupId>
             <artifactId>gatling-charts-highcharts</artifactId>
@@ -29,13 +38,34 @@
     </dependencies>
 
     <build>
+        <testSourceDirectory>src/test/scala</testSourceDirectory>
         <plugins>
+            <plugin>
+                <groupId>net.alchim31.maven</groupId>
+                <artifactId>scala-maven-plugin</artifactId>
+                <version>${scala-plugin.version}</version>
+                <executions>
+                    <execution>
+                        <goals><goal>testCompile</goal></goals>
+                        <configuration>
+                            <args>
+                                <arg>-deprecation</arg>
+                                <arg>-feature</arg>
+                                <arg>-release:17</arg>
+                            </args>
+                            <jvmArgs>
+                                <jvmArg>-Xss100M</jvmArg>
+                            </jvmArgs>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
             <plugin>
                 <groupId>io.gatling</groupId>
                 <artifactId>gatling-maven-plugin</artifactId>
                 <version>${gatling-plugin.version}</version>
                 <configuration>
-                    <simulationClass>simulations.TradeSubmissionSimulation</simulationClass>
+                    <simulationClass>${gatling.simulationClass}</simulationClass>
                 </configuration>
             </plugin>
         </plugins>

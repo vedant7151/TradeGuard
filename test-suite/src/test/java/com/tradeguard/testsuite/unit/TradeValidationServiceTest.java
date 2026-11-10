@@ -135,4 +135,87 @@ class TradeValidationServiceTest {
 
         assertThat(result.valid()).isFalse();
     }
+
+    @Test
+    void negativeQuantity_isRejected() {
+        TradeValidationService.ValidationResult result =
+                validationService.validate(buyTrade(new BigDecimal("-3"), new BigDecimal("10")), portfolio);
+
+        assertThat(result.valid()).isFalse();
+        assertThat(result.rejectionReason()).contains("Quantity must be greater than zero");
+    }
+
+    @Test
+    void nullQuantity_isRejected() {
+        TradeValidationService.ValidationResult result =
+                validationService.validate(buyTrade(null, new BigDecimal("10")), portfolio);
+
+        assertThat(result.valid()).isFalse();
+    }
+
+    @Test
+    void zeroPrice_isRejected() {
+        TradeValidationService.ValidationResult result =
+                validationService.validate(buyTrade(new BigDecimal("1"), BigDecimal.ZERO), portfolio);
+
+        assertThat(result.valid()).isFalse();
+        assertThat(result.rejectionReason()).contains("Price must be greater than zero");
+    }
+
+    @Test
+    void nullPrice_isRejected() {
+        TradeValidationService.ValidationResult result =
+                validationService.validate(buyTrade(new BigDecimal("1"), null), portfolio);
+
+        assertThat(result.valid()).isFalse();
+    }
+
+    @Test
+    void buyExactlyMatchingCashBalance_isValidated() {
+        // boundary: 10 x 1000 == 10000 cash, must be allowed
+        TradeValidationService.ValidationResult result =
+                validationService.validate(buyTrade(new BigDecimal("10"), new BigDecimal("1000")), portfolio);
+
+        assertThat(result.valid()).isTrue();
+    }
+
+    @Test
+    void buyOneCentOverCashBalance_isRejected() {
+        TradeValidationService.ValidationResult result =
+                validationService.validate(buyTrade(new BigDecimal("1"), new BigDecimal("10000.01")), portfolio);
+
+        assertThat(result.valid()).isFalse();
+        assertThat(result.rejectionReason()).contains("Insufficient funds");
+    }
+
+    @Test
+    void sellExactlyHeldQuantity_isValidated() {
+        when(positionRepository.findByPortfolioIdAndTicker(1L, "AAPL"))
+                .thenReturn(Optional.of(Position.builder().portfolioId(1L).ticker("AAPL").quantity(new BigDecimal("10")).build()));
+
+        TradeValidationService.ValidationResult result =
+                validationService.validate(sellTrade(new BigDecimal("10"), new BigDecimal("150")), portfolio);
+
+        assertThat(result.valid()).isTrue();
+    }
+
+    @Test
+    void sellRejectionReportsHeldAndRequestedUnits() {
+        when(positionRepository.findByPortfolioIdAndTicker(1L, "AAPL"))
+                .thenReturn(Optional.of(Position.builder().portfolioId(1L).ticker("AAPL").quantity(new BigDecimal("5")).build()));
+
+        TradeValidationService.ValidationResult result =
+                validationService.validate(sellTrade(new BigDecimal("10"), new BigDecimal("150")), portfolio);
+
+        assertThat(result.rejectionReason()).contains("holding 5").contains("AAPL").contains("sell 10");
+    }
+
+    @Test
+    void sellTradeDoesNotCheckCashBalance() {
+        portfolio.setCashBalance(BigDecimal.ZERO);
+        when(positionRepository.findByPortfolioIdAndTicker(1L, "AAPL"))
+                .thenReturn(Optional.of(Position.builder().portfolioId(1L).ticker("AAPL").quantity(new BigDecimal("50")).build()));
+
+        assertThat(validationService.validate(sellTrade(new BigDecimal("10"), new BigDecimal("150")), portfolio).valid()).isTrue();
+    }
 }

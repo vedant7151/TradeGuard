@@ -6,6 +6,12 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
+env:
+  JAVA_VERSION: "17"
+
 jobs:
   build:
     name: Build (compile all modules)
@@ -14,13 +20,23 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
         with:
-          java-version: "17"
+          java-version: ${{ env.JAVA_VERSION }}
           distribution: temurin
           cache: maven
-      - name: Compile sut-api
-        run: mvn -B -f sut-api/pom.xml compile
+      - name: Compile sut-api and install it for the test-suite
+        run: mvn -B -f sut-api/pom.xml install -DskipTests
       - name: Compile test-suite
-        run: mvn -B -f sut-api/pom.xml install -DskipTests && mvn -B -f test-suite/pom.xml test-compile
+        run: mvn -B -f test-suite/pom.xml test-compile
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend-dashboard/package-lock.json
+      - name: Build dashboard
+        working-directory: frontend-dashboard
+        run: |
+          npm ci
+          npm run build
 
   unit-tests:
     name: Unit Tests (JUnit + Mockito + JaCoCo)
@@ -30,18 +46,41 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
         with:
-          java-version: "17"
+          java-version: ${{ env.JAVA_VERSION }}
           distribution: temurin
           cache: maven
       - name: Install sut-api
         run: mvn -B -f sut-api/pom.xml install -DskipTests
-      - name: Run unit tests
+      # Fails the build if service-layer line coverage drops below 80 %.
+      - name: Run unit tests + coverage gate
         run: mvn -B -f test-suite/pom.xml test
-      - name: Upload JaCoCo report
-        uses: actions/upload-artifact@v4
+      - name: Coverage summary
+        if: always()
+        run: |
+          python3 - <<'EOF' >> "$GITHUB_STEP_SUMMARY"
+          import os, csv, sys
+          csv_path = "test-suite/target/site/jacoco/jacoco.csv"
+          if not os.path.exists(csv_path):
+              print("no coverage report — mvn test did not complete")
+              sys.exit(0)
+          rows = list(csv.DictReader(open(csv_path)))
+          print("### Unit-test line coverage\n\n| Package | Covered | Missed | % |\n|---|---|---|---|")
+          pk = {}
+          for r in rows:
+              a = pk.setdefault(r["PACKAGE"], [0, 0]); a[0] += int(r["LINE_COVERED"]); a[1] += int(r["LINE_MISSED"])
+          for name, (c, m) in sorted(pk.items()):
+              print(f"| {name} | {c} | {m} | {100*c/max(c+m,1):.1f}% |")
+          EOF
+      - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: jacoco-report
           path: test-suite/target/site/jacoco/
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: surefire-report
+          path: test-suite/target/surefire-reports/
 
   integration-tests:
     name: Integration Tests (Testcontainers + PostgreSQL)
@@ -51,15 +90,16 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
         with:
-          java-version: "17"
+          java-version: ${{ env.JAVA_VERSION }}
           distribution: temurin
           cache: maven
       - name: Install sut-api
         run: mvn -B -f sut-api/pom.xml install -DskipTests
+      # Docker is pre-installed on ubuntu-latest, which Testcontainers uses to start PostgreSQL.
       - name: Run integration tests
         run: mvn -B -f test-suite/pom.xml verify -P integration
-      - name: Upload Failsafe report
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: failsafe-integration-report
           path: test-suite/target/failsafe-reports/
@@ -72,15 +112,15 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
         with:
-          java-version: "17"
+          java-version: ${{ env.JAVA_VERSION }}
           distribution: temurin
           cache: maven
       - name: Install sut-api
         run: mvn -B -f sut-api/pom.xml install -DskipTests
       - name: Run BDD tests
         run: mvn -B -f test-suite/pom.xml verify -P bdd
-      - name: Upload Cucumber report
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: cucumber-report
           path: test-suite/target/cucumber-reports/
@@ -93,31 +133,37 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
         with:
-          java-version: "17"
+          java-version: ${{ env.JAVA_VERSION }}
           distribution: temurin
           cache: maven
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend-dashboard/package-lock.json
       - name: Install sut-api
         run: mvn -B -f sut-api/pom.xml install -DskipTests
-      - name: Start SUT API
+      - name: Start SUT API (in-memory DB)
         run: |
-          nohup java -jar sut-api/target/sut-api.jar --spring.profiles.active=test > sut-api.log 2>&1 &
-          npx wait-on http://localhost:8080/api/trades --timeout 60000
-      - name: Install and start dashboard
+          nohup java -jar sut-api/target/sut-api-exec.jar --spring.profiles.active=test > sut-api.log 2>&1 &
+          curl -sf --retry 30 --retry-delay 2 --retry-connrefused http://localhost:8080/actuator/health
+      - name: Build and serve dashboard
         working-directory: frontend-dashboard
         run: |
-          npm install
-          nohup npm run dev -- --host > dashboard.log 2>&1 &
-          npx wait-on http://localhost:5173 --timeout 60000
+          npm ci
+          npm run build
+          nohup npx vite preview --host --port 5173 > ../dashboard.log 2>&1 &
+          curl -sf --retry 30 --retry-delay 2 --retry-connrefused http://localhost:5173
+      # Chrome is pre-installed on GitHub runners; Selenium Manager resolves the matching driver.
       - name: Run Selenium tests
         run: mvn -B -f test-suite/pom.xml verify -P selenium
-      - name: Upload Selenium report
+      - name: Service logs
+        if: failure()
+        run: tail -n 100 sut-api.log dashboard.log 2>/dev/null || true
+      - uses: actions/upload-artifact@v4
         if: always()
-        uses: actions/upload-artifact@v4
         with:
-          name: selenium-failsafe-report
+          name: selenium-report
           path: test-suite/target/failsafe-reports/
 
   performance-tests:
@@ -128,23 +174,37 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
         with:
-          java-version: "17"
+          java-version: ${{ env.JAVA_VERSION }}
           distribution: temurin
           cache: maven
       - name: Install sut-api
         run: mvn -B -f sut-api/pom.xml install -DskipTests
-      - name: Start SUT API
+      - name: Start SUT API (in-memory DB)
         run: |
-          nohup java -jar sut-api/target/sut-api.jar --spring.profiles.active=test > sut-api.log 2>&1 &
-          npx --yes wait-on http://localhost:8080/api/trades --timeout 60000
-      - name: Run Gatling simulation
-        run: mvn -B -f performance/pom.xml gatling:test -Dgatling.baseUrl=http://localhost:8080
-      - name: Upload Gatling report
+          nohup java -jar sut-api/target/sut-api-exec.jar --spring.profiles.active=test > sut-api.log 2>&1 &
+          curl -sf --retry 30 --retry-delay 2 --retry-connrefused http://localhost:8080/actuator/health
+      # Fails the job if p95 >= 500 ms or the error rate >= 1 %.
+      - name: Run Gatling simulation (50 concurrent users x 10 trades)
+        run: mvn -B -f performance/pom.xml test-compile gatling:test -Dgatling.baseUrl=http://localhost:8080
+      # Full lifecycle incl. settlement; also verifies final cash and position per user.
+      - name: Run Gatling settlement-flow simulation
+        run: mvn -B -f performance/pom.xml gatling:test -Dgatling.baseUrl=http://localhost:8080 -Dgatling.simulationClass=simulations.SettlementFlowSimulation
+      - uses: actions/upload-artifact@v4
         if: always()
-        uses: actions/upload-artifact@v4
         with:
           name: gatling-report
           path: performance/target/gatling/
+
+  docker-build:
+    name: Docker images build
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build SUT API image
+        run: docker build -t tradeguard-sut-api ./sut-api
+      - name: Build dashboard image
+        run: docker build -t tradeguard-dashboard ./frontend-dashboard
 
   publish-reports:
     name: Publish All Reports
@@ -152,5 +212,12 @@ jobs:
     needs: [unit-tests, integration-tests, bdd-tests, selenium-tests, performance-tests]
     if: always()
     steps:
-      - name: Reports already uploaded per job
-        run: echo "All suite reports were uploaded as job-level artifacts."
+      - uses: actions/download-artifact@v4
+        with:
+          path: reports
+      - name: Bundle all reports
+        run: ls -R reports | head -100
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tradeguard-all-reports
+          path: reports/

@@ -48,11 +48,16 @@ performance/target/
 # ---- Docker ----
 *.pid
 
-# ---- Secrets ----
+# ---- Secrets & Environment ----
+.env
+.env.*
 *.env
+!.env.example
 secrets/
 application-secrets.yml
 application-local.yml
 
-# ---- Internal docs (not published to GitHub) ----
+# ---- Personal & Internal Notes / Reports ----
+*.txt
+TRADEGUARD_*.md
 PRD_2_TradeGuard_Automated_Testing_Suite.md
